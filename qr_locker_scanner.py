@@ -53,6 +53,7 @@ if SERVO_ENABLED:
     try:
         from gpiozero import Servo
         _servo = Servo(SERVO_GPIO_PIN)
+        _servo.value = None  # detach immediately — stops the servo from spinning on startup
     except ImportError:
         print("[WARN] gpiozero not installed — servo disabled. "
               "Install with: sudo apt install -y python3-gpiozero")
@@ -64,7 +65,7 @@ def open_locker_servo(locker_number: str):
     if SERVO_ENABLED and _servo is not None:
         _servo.max()
         time.sleep(SERVO_OPEN_SECONDS)
-        _servo.min()
+        _servo.value = None  # detach to stop spinning
         print(f"  [SERVO] Locker {locker_number} closed")
     else:
         print(f"  [SIM] (would hold servo open for {SERVO_OPEN_SECONDS}s)")
