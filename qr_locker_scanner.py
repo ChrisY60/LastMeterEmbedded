@@ -32,6 +32,8 @@ FEEDBACK_DURATION_SECONDS = 4.0
 SERVO_ENABLED = True
 SERVO_GPIO_PIN = 17
 SERVO_OPEN_SECONDS = 3
+
+PICKUP_TIMEOUT_SECONDS = 60   # locker stays open for this long if nobody presses "Picked Up"
 # ===========================
 
 WINDOW_NAME = "LastMeter"
@@ -60,15 +62,18 @@ if SERVO_ENABLED:
         SERVO_ENABLED = False
 
 
-def open_locker_servo(locker_number: str):
-    print(f"  [SERVO] Opening locker {locker_number}")
+def start_servo():
     if SERVO_ENABLED and _servo is not None:
         _servo.max()
-        time.sleep(SERVO_OPEN_SECONDS)
-        _servo.value = None  # detach to stop spinning
-        print(f"  [SERVO] Locker {locker_number} closed")
     else:
-        print(f"  [SIM] (would hold servo open for {SERVO_OPEN_SECONDS}s)")
+        print("  [SIM] Servo spinning — locker open")
+
+
+def stop_servo():
+    if SERVO_ENABLED and _servo is not None:
+        _servo.value = None
+    else:
+        print("  [SIM] Servo stopped — locker closed")
 
 
 # --- Backend ---
@@ -174,6 +179,45 @@ def _draw_feedback(frame):
     _text_center(frame, _feedback["message"], w // 2, 36, 1.0, _WHITE, 2)
 
 
+# --- Pickup confirmation overlay ---
+
+def _draw_confirm_overlay(frame, locker: str, remaining: int, sw: int, sh: int) -> bool:
+    """
+    Draw the open-locker confirmation panel on top of the camera frame.
+    Returns True if the user pressed "Picked Up".
+    """
+    pw, ph = int(sw * 0.68), int(sh * 0.62)
+    px, py = (sw - pw) // 2, (sh - ph) // 2
+
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (px, py), (px + pw, py + ph), (15, 15, 15), -1)
+    cv2.addWeighted(overlay, 0.88, frame, 0.12, 0, frame)
+    cv2.rectangle(frame, (px, py), (px + pw, py + ph), _WHITE, 2)
+
+    # Green header bar
+    hh = int(ph * 0.22)
+    cv2.rectangle(frame, (px, py), (px + pw, py + hh), _GREEN, -1)
+    _text_center(frame, f"LOCKER {locker} IS OPEN",
+                 sw // 2, py + hh // 2, 1.2, _WHITE, 3)
+
+    # Body text
+    _text_center(frame, "Your package is ready to be collected.",
+                 sw // 2, py + int(ph * 0.38), 0.8, _WHITE, 2)
+    _text_center(frame, "This QR code cannot be used again.",
+                 sw // 2, py + int(ph * 0.50), 0.75, (80, 80, 220), 2)
+
+    # Countdown
+    color = _RED if remaining <= 10 else _GRAY
+    _text_center(frame, f"Auto-closing in  {remaining}s",
+                 sw // 2, py + int(ph * 0.63), 0.8, color, 2)
+
+    # "Picked Up" button
+    bw, bh = int(pw * 0.52), int(ph * 0.17)
+    bx = sw // 2 - bw // 2
+    by = py + int(ph * 0.76)
+    return _button(frame, "Picked Up", bx, by, bw, bh, _GREEN, _GREEN_H)
+
+
 # --- Screens ---
 
 def show_menu(sw: int, sh: int) -> str:
@@ -221,9 +265,13 @@ def run_pickup_mode(sw: int, sh: int):
     cv2.setMouseCallback(WINDOW_NAME, _mouse_cb)
     last_scanned: dict[str, float] = {}
 
-    # Back button dimensions
     bbw, bbh = 140, 46
     bbx, bby = 20, 20
+
+    # Two states: "scanning" — reading QR codes; "confirming" — locker is open
+    state = "scanning"
+    open_locker: str | None = None
+    close_deadline = 0.0
 
     print("\n[Pickup mode] Hold a QR code up to the camera. B / ESC to go back.")
 
@@ -234,54 +282,68 @@ def run_pickup_mode(sw: int, sh: int):
                 print("Failed to read frame from camera.")
                 break
 
-            # Resize camera frame to fill screen
             frame = cv2.resize(frame, (sw, sh))
 
-            for obj in decode(frame):
-                tracking_number = obj.data.decode("utf-8").strip()
+            if state == "scanning":
+                for obj in decode(frame):
+                    tracking_number = obj.data.decode("utf-8").strip()
 
-                pts = obj.polygon
-                if len(pts) == 4:
-                    pts_list = [(p.x, p.y) for p in pts]
-                    for i in range(4):
-                        cv2.line(frame, pts_list[i], pts_list[(i + 1) % 4], (0, 255, 0), 3)
-                cv2.putText(frame, tracking_number,
-                            (obj.rect.left, max(obj.rect.top - 10, 20)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    pts = obj.polygon
+                    if len(pts) == 4:
+                        pts_list = [(p.x, p.y) for p in pts]
+                        for i in range(4):
+                            cv2.line(frame, pts_list[i], pts_list[(i + 1) % 4], (0, 255, 0), 3)
+                    cv2.putText(frame, tracking_number,
+                                (obj.rect.left, max(obj.rect.top - 10, 20)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-                now = time.time()
-                if (tracking_number in last_scanned and
-                        now - last_scanned[tracking_number] < SCAN_COOLDOWN_SECONDS):
-                    continue
-                last_scanned[tracking_number] = now
+                    now = time.time()
+                    if (tracking_number in last_scanned and
+                            now - last_scanned[tracking_number] < SCAN_COOLDOWN_SECONDS):
+                        continue
+                    last_scanned[tracking_number] = now
 
-                print(f"\nScanned: {tracking_number}")
-                result = pickup_package(tracking_number)
-                print(f"  {result['message']}")
-                _show_feedback(result["message"], ok=result["ok"])
+                    print(f"\nScanned: {tracking_number}")
+                    result = pickup_package(tracking_number)
+                    print(f"  {result['message']}")
 
-                if result["ok"] and result["locker"]:
-                    open_locker_servo(result["locker"])
+                    if result["ok"] and result["locker"]:
+                        start_servo()
+                        state = "confirming"
+                        open_locker = result["locker"]
+                        close_deadline = time.time() + PICKUP_TIMEOUT_SECONDS
+                    else:
+                        _show_feedback(result["message"], ok=False)
 
-            _draw_feedback(frame)
+                _draw_feedback(frame)
 
-            # Back button
-            back_hover = bbx <= _mx <= bbx + bbw and bby <= _my <= bby + bbh
-            cv2.rectangle(frame, (bbx, bby), (bbx + bbw, bby + bbh),
-                          (80, 80, 80) if back_hover else (50, 50, 50), -1)
-            cv2.rectangle(frame, (bbx, bby), (bbx + bbw, bby + bbh), _WHITE, 1)
-            _text_center(frame, "< Back", bbx + bbw // 2, bby + bbh // 2, 0.7, _WHITE, 2)
+                back_hover = bbx <= _mx <= bbx + bbw and bby <= _my <= bby + bbh
+                cv2.rectangle(frame, (bbx, bby), (bbx + bbw, bby + bbh),
+                              (80, 80, 80) if back_hover else (50, 50, 50), -1)
+                cv2.rectangle(frame, (bbx, bby), (bbx + bbw, bby + bbh), _WHITE, 1)
+                _text_center(frame, "< Back", bbx + bbw // 2, bby + bbh // 2, 0.7, _WHITE, 2)
+                _text_center(frame, "Scan a QR code to pick up your package",
+                             sw // 2, sh - 28, 0.7, _GRAY, 1)
 
-            # Hint
-            _text_center(frame, "Scan a QR code to pick up your package",
-                         sw // 2, sh - 28, 0.7, _GRAY, 1)
+                cv2.imshow(WINDOW_NAME, frame)
+                key = cv2.waitKey(1) & 0xFF
+                if key in (ord('b'), 27) or (back_hover and _consume_click()):
+                    break
 
-            cv2.imshow(WINDOW_NAME, frame)
-            key = cv2.waitKey(1) & 0xFF
+            elif state == "confirming":
+                remaining = max(0, int(close_deadline - time.time()))
+                picked_up = _draw_confirm_overlay(frame, open_locker, remaining, sw, sh)
 
-            if key in (ord('b'), 27) or (back_hover and _consume_click()):
-                break
+                cv2.imshow(WINDOW_NAME, frame)
+                cv2.waitKey(1)
+
+                if picked_up or remaining <= 0:
+                    stop_servo()
+                    state = "scanning"
+                    open_locker = None
+
     finally:
+        stop_servo()
         cap.release()
 
 
