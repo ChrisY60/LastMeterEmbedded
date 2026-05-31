@@ -264,6 +264,7 @@ def run_pickup_mode(sw: int, sh: int):
 
     cv2.setMouseCallback(WINDOW_NAME, _mouse_cb)
     last_scanned: dict[str, float] = {}
+    picked_up: set[str] = set()  # tracking numbers already processed this session
 
     bbw, bbh = 140, 46
     bbx, bby = 20, 20
@@ -297,6 +298,8 @@ def run_pickup_mode(sw: int, sh: int):
                                 (obj.rect.left, max(obj.rect.top - 10, 20)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
+                    if tracking_number in picked_up:
+                        continue
                     now = time.time()
                     if (tracking_number in last_scanned and
                             now - last_scanned[tracking_number] < SCAN_COOLDOWN_SECONDS):
@@ -308,6 +311,7 @@ def run_pickup_mode(sw: int, sh: int):
                     print(f"  {result['message']}")
 
                     if result["ok"] and result["locker"]:
+                        picked_up.add(tracking_number)
                         start_servo()
                         state = "confirming"
                         open_locker = result["locker"]
