@@ -55,7 +55,7 @@ if SERVO_ENABLED:
     try:
         from gpiozero import Servo
         _servo = Servo(SERVO_GPIO_PIN)
-        _servo.value = None  # detach immediately — stops the servo from spinning on startup
+        _servo.mid()  # send neutral (1.5ms) pulse — stops a continuous rotation servo
     except ImportError:
         print("[WARN] gpiozero not installed — servo disabled. "
               "Install with: sudo apt install -y python3-gpiozero")
@@ -71,7 +71,7 @@ def start_servo():
 
 def stop_servo():
     if SERVO_ENABLED and _servo is not None:
-        _servo.value = None
+        _servo.mid()  # send neutral pulse to stop the continuous rotation servo
     else:
         print("  [SIM] Servo stopped — locker closed")
 
