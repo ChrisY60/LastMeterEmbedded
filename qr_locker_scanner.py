@@ -50,33 +50,36 @@ _GOLD    = (40, 160, 210)
 _RED     = (50, 50, 200)
 
 # --- Servo setup ---
-_servo = None
+_pwm = None
 if SERVO_ENABLED:
     try:
-        from gpiozero import Servo
-        from gpiozero.pins.pigpio import PiGPIOFactory
-        _servo = Servo(SERVO_GPIO_PIN, pin_factory=PiGPIOFactory())
-        _servo.value = None  # detach signal — no PWM until needed
-    except ImportError:
-        print("[WARN] gpiozero/pigpio not installed — servo disabled. "
-              "Install with: sudo apt install -y python3-gpiozero pigpio python3-pigpio && sudo systemctl enable --now pigpiod")
+        import RPi.GPIO as GPIO
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(SERVO_GPIO_PIN, GPIO.OUT)
+        _pwm = GPIO.PWM(SERVO_GPIO_PIN, 50)
+        _pwm.start(0)  # 0 duty cycle = no signal = no jitter at startup
+    except Exception as e:
+        print(f"[WARN] RPi.GPIO not available — servo disabled: {e}")
         SERVO_ENABLED = False
 
 
-def start_servo():
-    if SERVO_ENABLED and _servo is not None:
-        _servo.max()
+def _move_servo(angle: float):
+    """Move to angle (degrees) then cut signal to prevent jitter."""
+    if _pwm is not None:
+        duty = 2 + (angle / 180) * 10
+        _pwm.ChangeDutyCycle(duty)
+        time.sleep(0.5)
+        _pwm.ChangeDutyCycle(0)  # cut signal — servo holds position without jitter
     else:
-        print("  [SIM] Servo spinning — locker open")
+        print(f"  [SIM] Servo → {angle}°")
+
+
+def start_servo():
+    _move_servo(90)  # open position
 
 
 def stop_servo():
-    if SERVO_ENABLED and _servo is not None:
-        _servo.mid()   # send neutral pulse first to brake the continuous rotation servo
-        time.sleep(0.2)
-        _servo.value = None  # then detach PWM so there's no jitter while idle
-    else:
-        print("  [SIM] Servo stopped — locker closed")
+    _move_servo(0)   # closed position
 
 
 # --- Backend ---
@@ -388,6 +391,12 @@ def main():
             break
 
     cv2.destroyAllWindows()
+    if _pwm is not None:
+        try:
+            _pwm.stop()
+            GPIO.cleanup()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
