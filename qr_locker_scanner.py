@@ -66,9 +66,9 @@ if SERVO_ENABLED:
 def _move_servo(angle: float):
     """Move to angle (degrees) then cut signal to prevent jitter."""
     if _pwm is not None:
-        duty = 2 + (angle / 180) * 10
+        duty = 5 + (angle / 180) * 5  # 0°→5%(1ms), 90°→7.5%(1.5ms), 180°→10%(2ms)
         _pwm.ChangeDutyCycle(duty)
-        time.sleep(0.5)
+        time.sleep(1.0)
         _pwm.ChangeDutyCycle(0)  # cut signal — servo holds position without jitter
     else:
         print(f"  [SIM] Servo → {angle}°")
