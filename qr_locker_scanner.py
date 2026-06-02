@@ -54,11 +54,12 @@ _servo = None
 if SERVO_ENABLED:
     try:
         from gpiozero import Servo
-        _servo = Servo(SERVO_GPIO_PIN)
-        _servo.mid()  # send neutral (1.5ms) pulse — stops a continuous rotation servo
+        from gpiozero.pins.pigpio import PiGPIOFactory
+        _servo = Servo(SERVO_GPIO_PIN, pin_factory=PiGPIOFactory())
+        _servo.value = None  # detach signal — no PWM until needed
     except ImportError:
-        print("[WARN] gpiozero not installed — servo disabled. "
-              "Install with: sudo apt install -y python3-gpiozero")
+        print("[WARN] gpiozero/pigpio not installed — servo disabled. "
+              "Install with: sudo apt install -y python3-gpiozero pigpio python3-pigpio && sudo systemctl enable --now pigpiod")
         SERVO_ENABLED = False
 
 
@@ -71,7 +72,9 @@ def start_servo():
 
 def stop_servo():
     if SERVO_ENABLED and _servo is not None:
-        _servo.mid()  # send neutral pulse to stop the continuous rotation servo
+        _servo.mid()   # send neutral pulse first to brake the continuous rotation servo
+        time.sleep(0.2)
+        _servo.value = None  # then detach PWM so there's no jitter while idle
     else:
         print("  [SIM] Servo stopped — locker closed")
 
