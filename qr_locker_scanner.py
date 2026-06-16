@@ -459,12 +459,15 @@ def run_pickup_mode(sw: int, sh: int):
  
             elif state == "confirming":
                 remaining = max(0, int(close_deadline - time.time()))
-                picked_up = _draw_confirm_overlay(frame, open_locker, remaining, sw, sh)
- 
+                confirmed = _draw_confirm_overlay(frame, open_locker, remaining, sw, sh)
+
                 cv2.imshow(WINDOW_NAME, frame)
                 cv2.waitKey(1)
- 
-                if picked_up or remaining <= 0:
+
+                if confirmed:
+                    stop_servo()
+                    break  # return to the main menu
+                if remaining <= 0:
                     stop_servo()
                     state = "scanning"
                     open_locker = None
@@ -562,7 +565,10 @@ def run_deliver_mode(sw: int, sh: int):
                 cv2.imshow(WINDOW_NAME, frame)
                 cv2.waitKey(1)
 
-                if ready or remaining <= 0:
+                if ready:
+                    stop_servo()
+                    break  # return to the main menu
+                if remaining <= 0:
                     stop_servo()
                     state = "scanning"
                     open_locker = None
