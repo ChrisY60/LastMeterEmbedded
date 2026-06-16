@@ -21,14 +21,25 @@ Run:
 Press Q in the window to quit. Press B or ESC from scanner to return to menu.
 """
  
+import os
+
+# OpenCV ships its own Qt build. On a Wayland session it tries the "wayland"
+# platform plugin first (which the bundled Qt doesn't include) and prints
+# noisy warnings: 'Could not find the Qt platform plugin "wayland"' and
+# 'Qt no longer ships fonts'. Force the X11/xcb backend that OpenCV always
+# bundles (works under XWayland too) and silence the remaining qpa chatter.
+# Must be set before cv2 is imported.
+os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.*=false")
+
 import time
 import cv2
 import numpy as np
 import requests
 from pyzbar.pyzbar import decode
- 
+
 # ====== CONFIGURATION ======
-BACKEND_URL = "http://10.10.10.72:8080"
+BACKEND_URL = "http://10.85.170.165:8080"
  
 CAMERA_INDEX = 0
 SCAN_COOLDOWN_SECONDS = 3.0
@@ -47,17 +58,27 @@ DELIVER_TIMEOUT_SECONDS = 60  # locker stays open for this long if nobody presse
 # ===========================
  
 WINDOW_NAME = "LastMeter"
- 
-# Colours (BGR)
-_BG      = (30, 30, 30)
-_WHITE   = (255, 255, 255)
-_GRAY    = (160, 160, 160)
-_GREEN   = (40, 160, 40)
-_GREEN_H = (60, 210, 60)
-_BLUE    = (160, 80, 40)
-_BLUE_H  = (210, 130, 70)
-_GOLD    = (40, 160, 210)
-_RED     = (50, 50, 200)
+
+# Colours (BGR) — matched to the LastMeter web app: light theme, orange brand.
+# Hex values are the web app's design tokens (src/styles/global.css).
+_BG         = (251, 250, 249)   # gray-50   #f9fafb   app background
+_PANEL      = (255, 255, 255)   # white     #ffffff   cards / overlays
+_BORDER     = (235, 231, 229)   # gray-200  #e5e7eb   hairline borders
+_WHITE      = (255, 255, 255)   # on-colour text
+_TEXT       = (39, 24, 17)      # gray-900  #111827   headings / body
+_TEXT_MUTE  = (128, 114, 107)   # gray-500  #6b7280   secondary text
+_TEXT_FAINT = (175, 163, 156)   # gray-400  #9ca3af   hints
+
+_ORANGE     = (12, 88, 234)     # orange-600 #ea580c  primary brand
+_ORANGE_H   = (22, 115, 249)    # orange-500 #f97316  primary hover
+_ORANGE_LT  = (60, 146, 251)    # orange-400 #fb923c  accents / QR highlight
+
+_DARK       = (39, 24, 17)      # gray-900  #111827   secondary action
+_DARK_H     = (81, 65, 55)      # gray-700  #374151   secondary hover
+
+_GREEN      = (94, 197, 34)     # green-500 #22c55e   success
+_RED        = (68, 68, 239)     # red-500   #ef4444   error
+_AMBER      = (8, 179, 234)     # amber     #eab308   warning
  
 # --- Servo setup (hardware PWM) ---
 _pwm = None
@@ -219,7 +240,6 @@ def _button(frame, label: str, x: int, y: int, w: int, h: int,
     hover = x <= _mx <= x + w and y <= _my <= y + h
     color = hover_color if hover else base_color
     cv2.rectangle(frame, (x, y), (x + w, y + h), color, -1)
-    cv2.rectangle(frame, (x, y), (x + w, y + h), _WHITE, 2)
     _text_center(frame, label, x + w // 2, y + h // 2, 0.9, _WHITE, 2)
     return hover and _consume_click()
  
@@ -255,32 +275,32 @@ def _draw_confirm_overlay(frame, locker: str, remaining: int, sw: int, sh: int) 
     px, py = (sw - pw) // 2, (sh - ph) // 2
  
     overlay = frame.copy()
-    cv2.rectangle(overlay, (px, py), (px + pw, py + ph), (15, 15, 15), -1)
-    cv2.addWeighted(overlay, 0.88, frame, 0.12, 0, frame)
-    cv2.rectangle(frame, (px, py), (px + pw, py + ph), _WHITE, 2)
- 
-    # Green header bar
+    cv2.rectangle(overlay, (px, py), (px + pw, py + ph), _PANEL, -1)
+    cv2.addWeighted(overlay, 0.93, frame, 0.07, 0, frame)
+    cv2.rectangle(frame, (px, py), (px + pw, py + ph), _BORDER, 2)
+
+    # Orange brand header bar
     hh = int(ph * 0.22)
-    cv2.rectangle(frame, (px, py), (px + pw, py + hh), _GREEN, -1)
+    cv2.rectangle(frame, (px, py), (px + pw, py + hh), _ORANGE, -1)
     _text_center(frame, f"LOCKER {locker} IS OPEN",
                  sw // 2, py + hh // 2, 1.2, _WHITE, 3)
- 
+
     # Body text
     _text_center(frame, "Your package is ready to be collected.",
-                 sw // 2, py + int(ph * 0.38), 0.8, _WHITE, 2)
+                 sw // 2, py + int(ph * 0.38), 0.8, _TEXT, 2)
     _text_center(frame, "This QR code cannot be used again.",
-                 sw // 2, py + int(ph * 0.50), 0.75, (80, 80, 220), 2)
- 
+                 sw // 2, py + int(ph * 0.50), 0.75, _RED, 2)
+
     # Countdown
-    color = _RED if remaining <= 10 else _GRAY
+    color = _RED if remaining <= 10 else _TEXT_MUTE
     _text_center(frame, f"Auto-closing in  {remaining}s",
                  sw // 2, py + int(ph * 0.63), 0.8, color, 2)
- 
+
     # "Picked Up" button
     bw, bh = int(pw * 0.52), int(ph * 0.17)
     bx = sw // 2 - bw // 2
     by = py + int(ph * 0.76)
-    return _button(frame, "Picked Up", bx, by, bw, bh, _GREEN, _GREEN_H)
+    return _button(frame, "Picked Up", bx, by, bw, bh, _ORANGE, _ORANGE_H)
 
 
 def _draw_deliver_overlay(frame, locker: str, remaining: int, unclaimed: bool,
@@ -293,25 +313,25 @@ def _draw_deliver_overlay(frame, locker: str, remaining: int, unclaimed: bool,
     px, py = (sw - pw) // 2, (sh - ph) // 2
 
     overlay = frame.copy()
-    cv2.rectangle(overlay, (px, py), (px + pw, py + ph), (15, 15, 15), -1)
-    cv2.addWeighted(overlay, 0.88, frame, 0.12, 0, frame)
-    cv2.rectangle(frame, (px, py), (px + pw, py + ph), _WHITE, 2)
+    cv2.rectangle(overlay, (px, py), (px + pw, py + ph), _PANEL, -1)
+    cv2.addWeighted(overlay, 0.93, frame, 0.07, 0, frame)
+    cv2.rectangle(frame, (px, py), (px + pw, py + ph), _BORDER, 2)
 
-    # Blue header bar
+    # Dark (secondary) header bar
     hh = int(ph * 0.22)
-    cv2.rectangle(frame, (px, py), (px + pw, py + hh), _BLUE, -1)
+    cv2.rectangle(frame, (px, py), (px + pw, py + hh), _DARK, -1)
     _text_center(frame, f"LOCKER {locker} IS OPEN",
                  sw // 2, py + hh // 2, 1.2, _WHITE, 3)
 
     # Body text
     _text_center(frame, "Place the package inside and close the door.",
-                 sw // 2, py + int(ph * 0.38), 0.8, _WHITE, 2)
+                 sw // 2, py + int(ph * 0.38), 0.8, _TEXT, 2)
     if unclaimed:
         _text_center(frame, "Unclaimed package - no recipient on file.",
-                     sw // 2, py + int(ph * 0.50), 0.75, _GOLD, 2)
+                     sw // 2, py + int(ph * 0.50), 0.75, _AMBER, 2)
 
     # Countdown
-    color = _RED if remaining <= 10 else _GRAY
+    color = _RED if remaining <= 10 else _TEXT_MUTE
     _text_center(frame, f"Auto-closing in  {remaining}s",
                  sw // 2, py + int(ph * 0.63), 0.8, color, 2)
 
@@ -319,7 +339,7 @@ def _draw_deliver_overlay(frame, locker: str, remaining: int, unclaimed: bool,
     bw, bh = int(pw * 0.52), int(ph * 0.17)
     bx = sw // 2 - bw // 2
     by = py + int(ph * 0.76)
-    return _button(frame, "Ready", bx, by, bw, bh, _BLUE, _BLUE_H)
+    return _button(frame, "Ready", bx, by, bw, bh, _DARK, _DARK_H)
 
 
 # --- Screens ---
@@ -337,16 +357,16 @@ def show_menu(sw: int, sh: int) -> str:
     while True:
         frame = np.full((sh, sw, 3), _BG, dtype=np.uint8)
  
-        _text_center(frame, "LastMeter", sw // 2, int(sh * 0.22), 2.8, _GOLD, 4)
-        _text_center(frame, "Smart Locker System", sw // 2, int(sh * 0.33), 0.95, _GRAY, 2)
- 
-        if _button(frame, "1.  Pick Up Package", bx, by1, bw, bh, _GREEN, _GREEN_H):
+        _text_center(frame, "LastMeter", sw // 2, int(sh * 0.22), 2.8, _ORANGE, 4)
+        _text_center(frame, "Smart Locker System", sw // 2, int(sh * 0.33), 0.95, _TEXT_MUTE, 2)
+
+        if _button(frame, "1.  Pick Up Package", bx, by1, bw, bh, _ORANGE, _ORANGE_H):
             return "pickup"
-        if _button(frame, "2.  Deliver Package", bx, by2, bw, bh, _BLUE, _BLUE_H):
+        if _button(frame, "2.  Deliver Package", bx, by2, bw, bh, _DARK, _DARK_H):
             return "deliver"
- 
+
         _text_center(frame, "Press 1 / 2 or click   |   Q to quit",
-                     sw // 2, int(sh * 0.92), 0.6, _GRAY, 1)
+                     sw // 2, int(sh * 0.92), 0.6, _TEXT_FAINT, 1)
  
         cv2.imshow(WINDOW_NAME, frame)
         key = cv2.waitKey(30) & 0xFF
@@ -397,10 +417,10 @@ def run_pickup_mode(sw: int, sh: int):
                     if len(pts) == 4:
                         pts_list = [(p.x, p.y) for p in pts]
                         for i in range(4):
-                            cv2.line(frame, pts_list[i], pts_list[(i + 1) % 4], (0, 255, 0), 3)
+                            cv2.line(frame, pts_list[i], pts_list[(i + 1) % 4], _ORANGE_LT, 3)
                     cv2.putText(frame, tracking_number,
                                 (obj.rect.left, max(obj.rect.top - 10, 20)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, _ORANGE_LT, 2)
  
                     if tracking_number in picked_up:
                         continue
@@ -427,11 +447,10 @@ def run_pickup_mode(sw: int, sh: int):
  
                 back_hover = bbx <= _mx <= bbx + bbw and bby <= _my <= bby + bbh
                 cv2.rectangle(frame, (bbx, bby), (bbx + bbw, bby + bbh),
-                              (80, 80, 80) if back_hover else (50, 50, 50), -1)
-                cv2.rectangle(frame, (bbx, bby), (bbx + bbw, bby + bbh), _WHITE, 1)
+                              _ORANGE if back_hover else _DARK, -1)
                 _text_center(frame, "< Back", bbx + bbw // 2, bby + bbh // 2, 0.7, _WHITE, 2)
                 _text_center(frame, "Scan a QR code to pick up your package",
-                             sw // 2, sh - 28, 0.7, _GRAY, 1)
+                             sw // 2, sh - 28, 0.7, _TEXT_FAINT, 1)
  
                 cv2.imshow(WINDOW_NAME, frame)
                 key = cv2.waitKey(1) & 0xFF
@@ -494,10 +513,10 @@ def run_deliver_mode(sw: int, sh: int):
                     if len(pts) == 4:
                         pts_list = [(p.x, p.y) for p in pts]
                         for i in range(4):
-                            cv2.line(frame, pts_list[i], pts_list[(i + 1) % 4], (0, 255, 0), 3)
+                            cv2.line(frame, pts_list[i], pts_list[(i + 1) % 4], _ORANGE_LT, 3)
                     cv2.putText(frame, tracking_number,
                                 (obj.rect.left, max(obj.rect.top - 10, 20)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, _ORANGE_LT, 2)
 
                     if tracking_number in delivered:
                         continue
@@ -525,11 +544,10 @@ def run_deliver_mode(sw: int, sh: int):
 
                 back_hover = bbx <= _mx <= bbx + bbw and bby <= _my <= bby + bbh
                 cv2.rectangle(frame, (bbx, bby), (bbx + bbw, bby + bbh),
-                              (80, 80, 80) if back_hover else (50, 50, 50), -1)
-                cv2.rectangle(frame, (bbx, bby), (bbx + bbw, bby + bbh), _WHITE, 1)
+                              _ORANGE if back_hover else _DARK, -1)
                 _text_center(frame, "< Back", bbx + bbw // 2, bby + bbh // 2, 0.7, _WHITE, 2)
                 _text_center(frame, "Scan a QR code to deliver a package",
-                             sw // 2, sh - 28, 0.7, _GRAY, 1)
+                             sw // 2, sh - 28, 0.7, _TEXT_FAINT, 1)
 
                 cv2.imshow(WINDOW_NAME, frame)
                 key = cv2.waitKey(1) & 0xFF
